@@ -1,45 +1,21 @@
-// server.js
 const WebSocket = require('ws');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-const server = http.createServer((req, res) => {
-  if (req.url === '/' || req.url === '/index.html') {
-    const filePath = path.join(__dirname, 'index.html');
-    fs.readFile(filePath, (err, data) => {
-      if (err) {
-        res.writeHead(500);
-        return res.end('Error loading index.html');
-      }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(data);
-    });
-  } else {
-    res.writeHead(404);
-    res.end();
-  }
-});
+// Создаем WebSocket сервер
+const wss = new WebSocket.Server({ port: PORT });
 
-const wss = new WebSocket.Server({ server });
-
-const rooms = new Map();
 let waitingPlayer = null;
+const rooms = new Map();
 
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-function sendToOpponent(room, sender, data) {
-  const opponent = room.players.find(p => p !== sender);
-  if (opponent && opponent.readyState === WebSocket.OPEN) {
-    opponent.send(JSON.stringify(data));
-  }
-}
+console.log(`WebSocket сервер запущен на порту ${PORT}`);
 
 wss.on('connection', (ws) => {
+  console.log('Новое подключение');
   let playerRoomId = null;
 
   ws.on('message', (message) => {
@@ -52,36 +28,56 @@ wss.on('connection', (ws) => {
 
     switch (data.type) {
       case 'quick_match':
+        // Если есть ожидающий игрок - создаем комнату
         if (waitingPlayer && waitingPlayer !== ws && waitingPlayer.readyState === WebSocket.OPEN) {
           const roomId = generateRoomId();
-          rooms.set(roomId, { players: [waitingPlayer, ws] });
+          rooms.set(roomId, { 
+            players: [waitingPlayer, ws],
+            createdAt: Date.now()
+          });
           
           waitingPlayer.send(JSON.stringify({ type: 'room_created', roomId }));
           ws.send(JSON.stringify({ type: 'room_created', roomId }));
           
           playerRoomId = roomId;
           
+          // Запускаем игру для обоих
           setTimeout(() => {
-            waitingPlayer.send(JSON.stringify({ type: 'game_start' }));
-            ws.send(JSON.stringify({ type: 'game_start' }));
+            if (rooms.has(roomId)) {
+              waitingPlayer.send(JSON.stringify({ type: 'game_start' }));
+              ws.send(JSON.stringify({ type: 'game_start' }));
+            }
           }, 200);
           
           waitingPlayer = null;
+          console.log(`Создана комната ${roomId}`);
         } else {
+          // Становимся в очередь
           waitingPlayer = ws;
-          ws.send(JSON.stringify({ type: 'room_created', roomId: null }));
+          ws.send(JSON.stringify({ type: 'waiting', message: 'Ожидание соперника...' }));
+          console.log('Игрок ожидает соперника');
         }
         break;
 
       case 'create_room':
         const newRoomId = generateRoomId();
-        rooms.set(newRoomId, { players: [ws] });
+        rooms.set(newRoomId, { 
+          players: [ws],
+          createdAt: Date.now()
+        });
         playerRoomId = newRoomId;
         ws.send(JSON.stringify({ type: 'room_created', roomId: newRoomId }));
+        console.log(`Создана комната ${newRoomId}`);
         break;
 
       case 'join_room':
-        const joinRoomId = data.roomId;
+        const joinRoomId = data.roomId?.toUpperCase();
+        
+        if (!joinRoomId) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Укажите код комнаты' }));
+          return;
+        }
+        
         const room = rooms.get(joinRoomId);
         
         if (!room) {
@@ -103,7 +99,9 @@ wss.on('connection', (ws) => {
         playerRoomId = joinRoomId;
         
         ws.send(JSON.stringify({ type: 'room_created', roomId: joinRoomId }));
+        console.log(`Игрок присоединился к комнате ${joinRoomId}`);
         
+        // Уведомляем обоих о старте игры
         room.players.forEach(p => {
           if (p.readyState === WebSocket.OPEN) {
             p.send(JSON.stringify({ type: 'game_start' }));
@@ -112,50 +110,96 @@ wss.on('connection', (ws) => {
         break;
 
       case 'state':
+        // Передаем состояние игры сопернику
         if (playerRoomId && rooms.has(playerRoomId)) {
           const currentRoom = rooms.get(playerRoomId);
-          sendToOpponent(currentRoom, ws, {
-            type: 'opponent_state',
-            board: data.board,
-            score: data.score,
-            currentPiece: data.currentPiece,
-            gameOver: data.gameOver
-          });
+          const opponent = currentRoom.players.find(p => p !== ws);
+          if (opponent && opponent.readyState === WebSocket.OPEN) {
+            opponent.send(JSON.stringify({
+              type: 'opponent_state',
+              board: data.board,
+              score: data.score,
+              currentPiece: data.currentPiece,
+              gameOver: data.gameOver || false
+            }));
+          }
         }
         break;
 
       case 'game_over':
+        // Уведомляем о конце игры
         if (playerRoomId && rooms.has(playerRoomId)) {
           const currentRoom = rooms.get(playerRoomId);
-          sendToOpponent(currentRoom, ws, {
-            type: 'opponent_game_over'
-          });
+          const opponent = currentRoom.players.find(p => p !== ws);
+          if (opponent && opponent.readyState === WebSocket.OPEN) {
+            opponent.send(JSON.stringify({ type: 'opponent_game_over' }));
+          }
         }
         break;
 
       case 'leave':
+        // Выход из комнаты
         if (playerRoomId && rooms.has(playerRoomId)) {
           const currentRoom = rooms.get(playerRoomId);
-          sendToOpponent(currentRoom, ws, { type: 'player_left' });
+          const opponent = currentRoom.players.find(p => p !== ws);
+          if (opponent && opponent.readyState === WebSocket.OPEN) {
+            opponent.send(JSON.stringify({ type: 'player_left' }));
+          }
           rooms.delete(playerRoomId);
           playerRoomId = null;
+          console.log('Игрок покинул комнату');
         }
         break;
+
+      case 'ping':
+        // Для поддержания соединения
+        ws.send(JSON.stringify({ type: 'pong' }));
+        break;
+
+      default:
+        console.log('Неизвестный тип сообщения:', data.type);
     }
   });
 
   ws.on('close', () => {
+    console.log('Игрок отключился');
+    
+    // Убираем из очереди ожидания
     if (waitingPlayer === ws) {
       waitingPlayer = null;
     }
+    
+    // Уведомляем соперника
     if (playerRoomId && rooms.has(playerRoomId)) {
       const currentRoom = rooms.get(playerRoomId);
-      sendToOpponent(currentRoom, ws, { type: 'player_left' });
+      const opponent = currentRoom.players.find(p => p !== ws);
+      if (opponent && opponent.readyState === WebSocket.OPEN) {
+        opponent.send(JSON.stringify({ type: 'player_left' }));
+      }
       rooms.delete(playerRoomId);
     }
   });
+
+  ws.on('error', (error) => {
+    console.error('Ошибка WebSocket:', error.message);
+  });
 });
 
-server.listen(PORT, () => {
-  console.log(`Тетрис сервер запущен на http://localhost:${PORT}`);
+// Очистка старых комнат каждые 30 минут
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of rooms.entries()) {
+    if (now - room.createdAt > 30 * 60 * 1000) { // 30 минут
+      room.players.forEach(p => {
+        if (p.readyState === WebSocket.OPEN) {
+          p.send(JSON.stringify({ type: 'room_timeout' }));
+        }
+      });
+      rooms.delete(roomId);
+      console.log(`Комната ${roomId} удалена по таймауту`);
+    }
+  }
+}, 5 * 60 * 1000); // Проверка каждые 5 минут
+
+console.log('Сервер готов к работе');
 });
