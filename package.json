@@ -1,10 +1,13 @@
 {
-  "name": "classic-tetris-online",
+  "name": "tetris-ws-server",
   "version": "1.0.0",
-  "description": "Классический Тетрис Онлайн с мультиплеером",
+  "description": "WebSocket сервер для мультиплеерного тетриса",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   },
   "dependencies": {
     "ws": "^8.14.2"
