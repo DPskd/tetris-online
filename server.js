@@ -71,7 +71,7 @@ wss.on('connection', (ws) => {
         break;
 
       case 'join_room':
-        const joinRoomId = data.roomId?.toUpperCase();
+        const joinRoomId = data.roomId ? data.roomId.toUpperCase() : null;
         
         if (!joinRoomId) {
           ws.send(JSON.stringify({ type: 'error', message: 'Укажите код комнаты' }));
@@ -189,7 +189,7 @@ wss.on('connection', (ws) => {
 setInterval(() => {
   const now = Date.now();
   for (const [roomId, room] of rooms.entries()) {
-    if (now - room.createdAt > 30 * 60 * 1000) { // 30 минут
+    if (now - room.createdAt > 30 * 60 * 1000) {
       room.players.forEach(p => {
         if (p.readyState === WebSocket.OPEN) {
           p.send(JSON.stringify({ type: 'room_timeout' }));
@@ -199,7 +199,6 @@ setInterval(() => {
       console.log(`Комната ${roomId} удалена по таймауту`);
     }
   }
-}, 5 * 60 * 1000); // Проверка каждые 5 минут
+}, 5 * 60 * 1000);
 
 console.log('Сервер готов к работе');
-});
