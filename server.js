@@ -1,8 +1,6 @@
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 3000;
-
-// Создаем WebSocket сервер
 const wss = new WebSocket.Server({ port: PORT });
 
 let waitingPlayer = null;
@@ -28,7 +26,6 @@ wss.on('connection', (ws) => {
 
     switch (data.type) {
       case 'quick_match':
-        // Если есть ожидающий игрок - создаем комнату
         if (waitingPlayer && waitingPlayer !== ws && waitingPlayer.readyState === WebSocket.OPEN) {
           const roomId = generateRoomId();
           rooms.set(roomId, { 
@@ -41,7 +38,6 @@ wss.on('connection', (ws) => {
           
           playerRoomId = roomId;
           
-          // Запускаем игру для обоих
           setTimeout(() => {
             if (rooms.has(roomId)) {
               waitingPlayer.send(JSON.stringify({ type: 'game_start' }));
@@ -52,7 +48,6 @@ wss.on('connection', (ws) => {
           waitingPlayer = null;
           console.log(`Создана комната ${roomId}`);
         } else {
-          // Становимся в очередь
           waitingPlayer = ws;
           ws.send(JSON.stringify({ type: 'waiting', message: 'Ожидание соперника...' }));
           console.log('Игрок ожидает соперника');
@@ -101,7 +96,6 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'room_created', roomId: joinRoomId }));
         console.log(`Игрок присоединился к комнате ${joinRoomId}`);
         
-        // Уведомляем обоих о старте игры
         room.players.forEach(p => {
           if (p.readyState === WebSocket.OPEN) {
             p.send(JSON.stringify({ type: 'game_start' }));
@@ -110,7 +104,6 @@ wss.on('connection', (ws) => {
         break;
 
       case 'state':
-        // Передаем состояние игры сопернику
         if (playerRoomId && rooms.has(playerRoomId)) {
           const currentRoom = rooms.get(playerRoomId);
           const opponent = currentRoom.players.find(p => p !== ws);
@@ -127,18 +120,34 @@ wss.on('connection', (ws) => {
         break;
 
       case 'game_over':
-        // Уведомляем о конце игры
         if (playerRoomId && rooms.has(playerRoomId)) {
           const currentRoom = rooms.get(playerRoomId);
           const opponent = currentRoom.players.find(p => p !== ws);
           if (opponent && opponent.readyState === WebSocket.OPEN) {
-            opponent.send(JSON.stringify({ type: 'opponent_game_over' }));
+            opponent.send(JSON.stringify({ 
+              type: 'opponent_game_over',
+              score: data.score
+            }));
+          }
+        }
+        break;
+
+      case 'final_result':
+        if (playerRoomId && rooms.has(playerRoomId)) {
+          const currentRoom = rooms.get(playerRoomId);
+          const opponent = currentRoom.players.find(p => p !== ws);
+          if (opponent && opponent.readyState === WebSocket.OPEN) {
+            opponent.send(JSON.stringify({
+              type: 'game_result',
+              myScore: data.myScore,
+              opponentScore: data.opponentScore,
+              winner: data.winner
+            }));
           }
         }
         break;
 
       case 'leave':
-        // Выход из комнаты
         if (playerRoomId && rooms.has(playerRoomId)) {
           const currentRoom = rooms.get(playerRoomId);
           const opponent = currentRoom.players.find(p => p !== ws);
@@ -152,7 +161,6 @@ wss.on('connection', (ws) => {
         break;
 
       case 'ping':
-        // Для поддержания соединения
         ws.send(JSON.stringify({ type: 'pong' }));
         break;
 
@@ -164,12 +172,10 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     console.log('Игрок отключился');
     
-    // Убираем из очереди ожидания
     if (waitingPlayer === ws) {
       waitingPlayer = null;
     }
     
-    // Уведомляем соперника
     if (playerRoomId && rooms.has(playerRoomId)) {
       const currentRoom = rooms.get(playerRoomId);
       const opponent = currentRoom.players.find(p => p !== ws);
@@ -185,7 +191,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Очистка старых комнат каждые 30 минут
+// Очистка старых комнат
 setInterval(() => {
   const now = Date.now();
   for (const [roomId, room] of rooms.entries()) {
